@@ -1,0 +1,280 @@
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+
+buildscript {
+    repositories {
+        mavenCentral()
+    }
+}
+
+plugins {
+    id "com.github.johnrengelman.shadow" version "7.1.2"
+}
+
+repositories {
+    maven {
+        name = "NeoForged Releases"
+        url = "https://maven.neoforged.net/releases"
+    }
+    maven {
+        name = "Modrinth"
+        url = "https://api.modrinth.com/maven"
+    }
+    mavenCentral()
+}
+
+architectury {
+    platformSetupLoomIde()
+    neoForge()
+}
+
+sourceSets {
+    main {
+        java {
+            // --- dropped for 1.21.4 (no compatible artifact) ---
+            exclude "org/valkyrienskies/mod/forge/mixin/compat/**"
+            exclude "org/valkyrienskies/mod/forge/compat/**"
+            // PORT(1.21.4): Create ducks (net.createmod / simibubi) — Create has no 1.21.4 build.
+            exclude "org/valkyrienskies/mod/forge/mixinducks/mod_compat/create/**"
+            // PORT(1.21.4): the legacy net.minecraftforge IForgePlayer duck is gone in NeoForge.
+            exclude "org/valkyrienskies/mod/forge/mixin/feature/forge_interact/MixinIForge2Player.java"
+        }
+        kotlin {
+            exclude "org/valkyrienskies/mod/forge/compat/**"
+            // PORT(1.21.4): Create (simibubi) is gone on 1.21.4, so this handler cannot compile.
+            exclude "org/valkyrienskies/mod/forge/common/ContraptionShipyardEntityHandlerForge.kt"
+        }
+        resources {
+            srcDir "$buildDir/generated/resources"
+        }
+    }
+}
+
+loom {
+    accessWidenerPath = project(":common").loom.accessWidenerPath
+
+    mixin {
+        useLegacyMixinAp = true
+        defaultRefmapName = "valkyrienskies-refmap.json"
+    }
+
+    mods {
+        "valkyrienskies" {
+            sourceSet sourceSets.main
+        }
+    }
+}
+
+configurations {
+    common
+    shadowCommon // Don't use shadow from the shadow plugin because we don't want IDEA to index this.
+    core
+    compileClasspath.extendsFrom common
+    runtimeClasspath.extendsFrom common
+    developmentNeoForge.extendsFrom common
+    compileClasspath.extendsFrom core
+    forgeRuntimeLibrary.extendsFrom core
+    shadowCommon.extendsFrom core
+    shadowCommonDevNoShadow
+    shadowCommonDevNoShadow.extendsFrom core
+}
+
+dependencies {
+    implementation(annotationProcessor("io.github.llamalad7:mixinextras-common:0.3.5"))
+    annotationProcessor("net.fabricmc:sponge-mixin:0.12.5+mixin.0.8.5")
+
+    neoForge "net.neoforged:neoforge:$rootProject.neoforge_version"
+
+    common(project(path: ":common", configuration: "namedElements")) {
+        transitive = false
+    }
+    shadowCommon(project(path: ":common", configuration: "transformProductionNeoForge")) {
+        transitive = false
+    }
+    shadowCommonDevNoShadow(project(path: ":common", configuration: "transformProductionNeoForge")) {
+        transitive = false
+    }
+
+    // NOTE(PORT 1.21.4): the whole optional mod-compat list (Create, Ponder, Flywheel,
+    // Registrate, CC:Tweaked, OC2R, EMF/ETF, dynmap, Mekanism, MFFS, TIS-3D, Epic Fight,
+    // Modular Routers, Integrated Dynamics, Twilight Forest, Embeddium, ...) had
+    // 1.21.1-only coordinates and is therefore not on this port's classpath.
+
+    // Kotlin for Forge (runtime loader for this mod). KFF 5.13.0 == the 1.21.4 build.
+    // PORT(1.21.4): Modrinth's maven cannot resolve a version-id coordinate through Gradle's
+    // POM layout, so the jar is vendored under libs/ and put on the compile classpath only
+    // (the player installs KFF themselves at runtime; it must not be shadowed into our jar).
+    // PORT(1.21.4): KotlinForForge is a runtime loader only (declared as modLoader in
+    // neoforge.mods.toml, installed by the player). Its 5.13 jars ship Kotlin 2.4 metadata that
+    // this project's Kotlin 2.0 compiler rejects, so the code uses NeoForge's own event buses
+    // (NeoForge.EVENT_BUS + ModContainer#getEventBus) instead of KFF's MOD_BUS/FORGE_BUS and
+    // nothing from KFF is on the compile classpath.
+
+    // Cloth for config
+    include(modImplementation("me.shedaniel.cloth:cloth-config-neoforge:${cloth_config_version}"))
+
+    // vs-core
+    implementation("org.valkyrienskies.core:util:${rootProject.vs_core_version}")
+    implementation("org.valkyrienskies.core:internal:${rootProject.vs_core_version}") {
+        exclude group: 'org.joml', module: 'joml'
+    }
+    runtimeOnly("org.valkyrienskies.core:impl:${rootProject.vs_core_version}") {
+        exclude group: 'org.joml', module: 'joml'
+    }
+
+    // PORT(1.21.4): every vs-core module is flattened into this mod jar (shadowCommon). `include` (jarjar)
+    // is not usable here: the shadow jar step drops the nested jars, leaving only metadata.json behind,
+    // so the classes end up missing at runtime (NoClassDefFoundError). Flattened classes live in the
+    // mod jar together with our own classes, where KotlinForForge's Kotlin stdlib is visible.
+    shadowCommon("org.valkyrienskies.core:api:${rootProject.vs_core_version}") {
+        exclude group: 'org.joml', module: 'joml'
+        transitive = false
+    }
+    shadowCommon("org.valkyrienskies.core:util:${rootProject.vs_core_version}") {
+        exclude group: 'org.joml', module: 'joml'
+        transitive = false
+    }
+    shadowCommon("org.valkyrienskies.core:internal:${rootProject.vs_core_version}") {
+        exclude group: 'org.joml', module: 'joml'
+        transitive = false
+    }
+    shadowCommon("org.valkyrienskies.core:impl:${rootProject.vs_core_version}") {
+        exclude group: 'org.joml', module: 'joml'
+        transitive = false
+    }
+    shadowCommon("org.valkyrienskies:physics_api_krunch:${rootProject.krunch_version}") {
+        exclude group: 'org.joml', module: 'joml'
+        transitive = false
+    }
+    shadowCommon("org.valkyrienskies:physics_api:${rootProject.krunch_api_version}") {
+        exclude group: 'org.joml', module: 'joml'
+        transitive = false
+    }
+
+    // joml-primitives (org.joml.primitives.*) is used by vs-core and our mixins; vanilla's joml does not ship
+    // the primitives package, so it is flattened into the mod jar. It must NOT appear as a separate
+    // module/library jar at the same time (split package: "org.joml.primitives and valkyrienskies
+    // export package org.joml.primitives").
+    shadowCommon("org.joml:joml-primitives:1.10.0") {
+        transitive = false
+    }
+
+    // vs-core impl (Dagger-generated code) references javax.inject at runtime; it is not shipped
+    // by Minecraft/NeoForge, so it must live in the mod jar as well.
+    shadowCommon("javax.inject:javax.inject:1") {
+        transitive = false
+    }
+
+    // vs-core impl's JSON/YAML/state stack. Minecraft only ships jackson-core/databind/annotations,
+    // so the remaining jackson artifacts + snakeyaml + coroutines are flattened in as well.
+    // PORT(1.21.4): Minecraft 1.21.4 ships jackson-core/databind/annotations 2.13.4. Bundling any
+    // jackson artifact at 2.14 makes it look for the newer StreamReadCapability fields and blows up
+    // at runtime (NoSuchFieldError -> CBORParser init failure on the first packet). Pin everything
+    // to the 2.13.4 line so it matches the core that Minecraft provides.
+    shadowCommon(files("libs/jackson-dataformat-cbor-2.13.4.jar"))
+    shadowCommon(files("libs/jackson-dataformat-yaml-2.13.4.jar"))
+    shadowCommon(files("libs/jackson-module-kotlin-2.13.4.jar"))
+    shadowCommon(files("libs/jackson-module-parameter-names-2.13.4.jar"))
+    // PORT(1.21.4): kotlin-reflect is NOT shadowed here. Its classes carry Kotlin metadata v2.4 and
+    // loom's remapJar refuses to rewrite metadata for a compiler newer than it knows
+    // ("kotlinx-metadata-jvm cannot write metadata for future compiler versions", max 2.1.0),
+    // which fails the whole build. The jar is instead injected into the finished, already remapped
+    // jar by vs2-port\inject-kotlin-reflect.ps1 (called at the end of build-forge.cmd) - it has no
+    // Minecraft references, so it never needs remapping.
+    // shadowCommon(files("libs/kotlin-reflect-2.4.21.jar"))
+    shadowCommon("com.github.Rubydesic:jackson-kotlin-dsl:1.2.0") { transitive = false }
+    shadowCommon("org.yaml:snakeyaml:1.33") { transitive = false }
+    // NOTE: kotlinx-coroutines must NOT be bundled - KotlinForForge already provides a
+    // kotlinx.coroutines.core module, and bundling it causes a split-package ResolutionException.
+}
+
+tasks.runClient.configure {
+    jvmArgs '-Dkotlinx.coroutines.debug=off'
+}
+
+tasks.runServer.configure {
+    jvmArgs '-Dkotlinx.coroutines.debug=off'
+}
+
+// Copy the VS common access widener to the generated resources folder.
+def generatedResourcesDir = layout.buildDirectory.dir("generated/resources")
+
+tasks.register("copyAccessWidener", Copy) {
+    from(project(":common").file("src/main/resources/valkyrienskies-common.accesswidener"))
+    into(generatedResourcesDir)
+}
+
+processResources {
+    dependsOn("copyAccessWidener")
+    inputs.property "version", project.version
+
+    filesMatching('META-INF/neoforge.mods.toml') {
+        expand "version": project.version
+    }
+}
+
+tasks.register('devNoShadowJar', com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar) {
+    exclude "fabric.mod.json"
+    exclude "architectury.common.json"
+
+    from(sourceSets.main.output)
+
+    dependsOn tasks.named("remapJar")
+    doFirst {
+        def remapJarFile = tasks.named("remapJar").get().archiveFile.get().asFile
+
+        from({
+            zipTree(remapJarFile).matching {
+                include "META-INF/accesstransformer.cfg"
+            }
+        })
+    }
+
+    configurations = [project.configurations.shadowCommonDevNoShadow]
+    archiveClassifier.set("dev-no-shadow")
+}
+
+build.dependsOn devNoShadowJar
+
+shadowJar {
+    exclude "fabric.mod.json"
+    exclude "architectury.common.json"
+    exclude "net/optifine/**"
+    exclude "org/apache/commons/**"
+    // dev-only KotlinForForge marker for the hand-built library mod; it must not ship
+    exclude "port_dev/**"
+
+    configurations = [project.configurations.shadowCommon]
+    archiveClassifier.set "dev-shadow"
+}
+
+jar {
+    exclude "port_dev/**"
+}
+
+remapJar {
+    atAccessWideners.add "valkyrienskies-common.accesswidener"
+    input.set shadowJar.archiveFile
+    dependsOn shadowJar
+    archiveClassifier.set null
+}
+
+java.toolchain.languageVersion = JavaLanguageVersion.of(21)
+compileKotlin.compilerOptions.jvmTarget = JvmTarget.JVM_21
+
+jar {
+    archiveClassifier.set "dev"
+}
+
+sourcesJar {
+    dependsOn("copyAccessWidener")
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    def commonSources = project(":common").sourcesJar
+    dependsOn commonSources
+    from commonSources.archiveFile.map { zipTree(it) }
+}
+
+components.java {
+    withVariantsFromConfiguration(project.configurations.shadowRuntimeElements) {
+        skip()
+    }
+}
